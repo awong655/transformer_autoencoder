@@ -126,13 +126,7 @@ class Generator(nn.Module):
 
         x = self.mlp(noise).view(-1, self.initial_size ** 2, self.dim)
 
-        print("x shape", x.shape)
-
         x = x + self.positional_embedding_1
-
-        print("pos embedding1 shape", self.positional_embedding_1.shape)
-        print("new x shape", x.shape)
-
 
         H, W = self.initial_size, self.initial_size
         x = self.TransformerEncoder_encoder1(x)
@@ -144,8 +138,7 @@ class Generator(nn.Module):
         x,H,W = UpSampling(x,H,W)
         x = x + self.positional_embedding_3
         x = self.TransformerEncoder_encoder3(x)
-        print("third encoder out", x.shape)
-        print("permuted view of x", x.permute(0, 2, 1).view(-1, self.dim//16, H, W).shape)
+
         x = self.linear(x.permute(0, 2, 1).view(-1, self.dim//16, H, W))
 
         return x
