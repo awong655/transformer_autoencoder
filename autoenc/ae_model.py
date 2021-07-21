@@ -1,5 +1,7 @@
 from vit_pytorch import ViT
 from TransGan_pytorch import models as TGModels
+import fb_vit.vision_transformer as fb_vit
+import torch.nn as nn
 
 class autoencoder:
     # TODO: Set up configurations
@@ -39,6 +41,30 @@ class tmpViT:
         self.dropout = dropout
         self.emb_dropout = emb_dropout
         self.keep_head = keep_head
+
+    def get_ViT(self):
+        return self.ViT
+class facebook_vit():
+    def __init__(self, image_size, patch_size, in_chans=3, num_classes=10, embed_dim=512
+                 , depth=12, num_heads=12, mlp_ratio=4., qkv_bias=False, qk_scale=None,
+                 drop_rate=0., attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm):
+
+        self.ViT = fb_vit.VisionTransformer(
+            image_size=[image_size],
+            patch_size=patch_size,
+            in_chans=in_chans,
+            num_classes=num_classes,
+            embed_dim=embed_dim,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            qkv_bias=qkv_bias,
+            qk_scale=qk_scale,
+            drop_rate=drop_rate,
+            attn_drop_rate=attn_drop_rate,
+            drop_path_rate=drop_path_rate,
+            norm_layer=norm_layer
+        )
 
     def get_ViT(self):
         return self.ViT

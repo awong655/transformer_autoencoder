@@ -1,2 +1,9 @@
+analysis_imgs/
+checkpoint_fb/
+checkpoint_final_vit_pytorch/
+checkpoint_final_vit_pytorch/
+cifar_imgs_fb/
 cifar_imgs/
+cifar_imgs_final_vit_pytorch/
 cifar_nonaug_imgs/
+

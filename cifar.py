@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import numpy as np
+from torch.utils.data import DataLoader, Subset
 import torch.backends.cudnn as cudnn
 
 import torchvision
@@ -15,7 +17,7 @@ from local_models import *
 #from utils import progress_bar
 from torchvision.utils import save_image, make_grid
 
-from autoenc.ae_model import tmpViT, tmpTransGan
+from autoenc.ae_model import tmpViT, tmpTransGan, facebook_vit
 
 from torch.optim.lr_scheduler import StepLR
 
@@ -35,87 +37,71 @@ start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
 # Data
 print('==> Preparing data..')
-transform_train = transforms.Compose([
-    #transforms.RandomCrop(32, padding=4),
-    #transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
-    #transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-])
-
-transform_test = transforms.Compose([
-    transforms.ToTensor(),
-    #transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-])
 
 trainset = torchvision.datasets.CIFAR10(
-    root='./data', train=True, download=True, transform=transform_train)
+    root='./data', train=True, download=True, transform=transforms.ToTensor())
 trainloader = torch.utils.data.DataLoader(
     trainset, batch_size=128, shuffle=True, num_workers=2)
 
 testset = torchvision.datasets.CIFAR10(
-    root='./data', train=False, download=True, transform=transform_test)
+    root='./data', train=False, download=True, transform=transforms.ToTensor())
 testloader = torch.utils.data.DataLoader(
     testset, batch_size=100, shuffle=False, num_workers=2)
 
-classes = ('plane', 'car', 'bird', 'cat', 'deer',
+allSampleSet = trainset + testset
+
+classes = ('airplane', 'automobile', 'bird', 'cat', 'deer',
            'dog', 'frog', 'horse', 'ship', 'truck')
 
-# Model
-print('==> Building models..')
-# net = VGG('VGG19')
-# net = ResNet18()
-# net = PreActResNet18()
-# net = GoogLeNet()
-# net = DenseNet121()
-# net = ResNeXt29_2x64d()
-# net = MobileNet()
-# net = MobileNetV2()
-# net = DPN92()
-# net = ShuffleNetG2()
-# net = SENet18()
-# net = ShuffleNetV2(1)
-# net = EfficientNetB0()
-# net = RegNetX_200MF()
-#net = SimpleDLA()
-encoder = tmpViT(image_size=32, patch_size=4, num_classes=10, dim=512, depth=6, heads=16,
-                 mlp_dim=1024, dropout=0.1, emb_dropout=0.1, keep_head=False).get_ViT()
+train_inliers = [np.where(np.array(trainset.targets) == class_idx)[0]
+              for class_idx in trainset.class_to_idx.values()]
+train_outliers = [np.where(np.array(trainset.targets) != class_idx)[0]
+              for class_idx in trainset.class_to_idx.values()]
+test_inliers = [np.where(np.array(testset.targets) == class_idx)[0]
+              for class_idx in testset.class_to_idx.values()]
+test_outliers = [np.where(np.array(testset.targets) != class_idx)[0]
+              for class_idx in testset.class_to_idx.values()]
 
-decoder = tmpTransGan(depth1=5, depth2=2, depth3=2, initial_size=8, dim=512,
-                      heads=8, mlp_ratio=4, drop_rate=0.5).get_TransGan()
-encoder = encoder.to(device)
-decoder = decoder.to(device)
-if device == 'cuda':
-    encoder = torch.nn.DataParallel(encoder)
-    decoder = torch.nn.DataParallel(decoder)
-    cudnn.benchmark = True
+for i in range(len(classes)):
+    test_inliers[i] += len(trainset)
+    test_outliers[i] += len(trainset)
 
-criterion = nn.MSELoss()
-enc_optimizer = optim.Adam(encoder.parameters(), lr=3e-5)
-dec_optimizer = optim.Adam(decoder.parameters(), lr=0.0001, eps=1e-08)
-#scheduler = StepLR(optimizer, step_size=1, gamma=0.7)
+    # Drop elements
+    train_outliers[i] = np.random.choice(train_outliers[i], size=500, replace=False)
+    test_outliers[i] = np.random.choice(test_outliers[i], size=500, replace=False)
 
-if args.resume_enc:
-    # Load checkpoint.
-    print('==> Resuming encoder from checkpoint..')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint_encoder = torch.load('./checkpoint/ckpt_enc.pth')
-    encoder.load_state_dict(checkpoint_encoder['encoder'])
-    decoder.load_state_dict(checkpoint_encoder['decoder'])
-    start_epoch = checkpoint_encoder['epoch']
+inliers_zip = zip(train_inliers, test_inliers)
+inliers = [ np.concatenate((i,j), dtype=np.int64) for i, j in inliers_zip]
 
-if args.resume_dec:
-    # Load checkpoint.
-    print('==> Resuming decoder from checkpoint..')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-    checkpoint_decoder = torch.load('./checkpoint/ckpt_dec.pth')
-    encoder.load_state_dict(checkpoint_encoder['encoder'])
-    decoder.load_state_dict(checkpoint_encoder['decoder'])
-    start_epoch = checkpoint_decoder['epoch']
+outliers_zip = zip(train_outliers, test_outliers)
+outliers = [ np.concatenate((i,j), dtype=np.int64) for i, j in outliers_zip]
+
+for i in outliers:
+    print("Outlier size: ", len(i))
+
+trainloader = [
+    DataLoader(
+        dataset=Subset(allSampleSet, inds),
+        batch_size=128,
+        shuffle=False,
+        num_workers=2
+    ) for inds in inliers]
+
+testloader = [
+    DataLoader(
+        dataset=Subset(allSampleSet, inds),
+        batch_size=128,
+        shuffle=True,
+        num_workers=2
+    ) for inds in outliers]
+
+unified_loaders = list(zip(trainloader, testloader))
+#loaders = list(map(iter, unified_loader))
 
 # Training
-def train(epoch):
+def train(epoch, trainloader, loader_idx):
     print('\nEpoch: %d' % epoch)
-    #net.train()
+    # net.train()
     train_loss = 0
     correct = 0
     total = 0
@@ -131,26 +117,24 @@ def train(epoch):
         enc_optimizer.step()
         dec_optimizer.step()
 
-        if (batch_idx % 50 == 0):
+        if (batch_idx % 500 == 0):
             print("writing image")
             cpu_inp = inputs.cpu()
             cpu_recons = recons.cpu()
             save_image(make_grid(cpu_inp, nrows=10),
-                       "./cifar_imgs/train_input_" + str(epoch) + "_" + str(batch_idx) + ".jpg")
+                       "./cifar_imgs/train_input_Inlier:" + classes[loader_idx] + "_epoch_" + str(epoch) + "_" + str(batch_idx) + ".jpg")
             save_image(make_grid(cpu_recons, nrows=10),
-                       "./cifar_imgs/train_recon_" + str(epoch) + "_" + str(batch_idx) + ".jpg")
+                       "./cifar_imgs/train_recon_Inlier:" + classes[loader_idx] + "_epoch_" + str(epoch) + "_" + str(batch_idx) + ".jpg")
         train_loss += loss.item()
-        #_, predicted = outputs.max(1)
-        #total += targets.size(0)
-        #correct += predicted.eq(targets).sum().item()
+        # _, predicted = outputs.max(1)
+        # total += targets.size(0)
+        # correct += predicted.eq(targets).sum().item()
 
-        print("Epoch No. ", epoch, "Batch Index.", batch_idx, "Loss: ", (train_loss/(batch_idx+1)))
-
-        #progress_bar(batch_idx, len(trainloader), 'Loss: %.3f'
-        #             % (train_loss/(batch_idx+1)))
+        print("Epoch No. ", epoch, "Batch Index.", batch_idx, "Loss: ", (train_loss / (batch_idx + 1)))
 
 
-def test(epoch):
+def test(epoch, testloader, loader_idx):
+    print("TESTING")
     global best_acc
     #net.eval()
     test_loss = 0
@@ -165,16 +149,13 @@ def test(epoch):
 
             test_loss += loss.item()
 
-            print("Epoch No. ", epoch, "Batch Index.", batch_idx, "Loss: ", (test_loss/(batch_idx+1)))
+            print("TEST: Epoch No. ", epoch, "Batch Index.", batch_idx, "Loss: ", (test_loss/(batch_idx+1)))
 
-            if (batch_idx % 50 == 0):
+            if (batch_idx % 500 == 0):
                 cpu_inp = inputs.cpu()
                 cpu_recons = recons.cpu()
-                save_image(make_grid(cpu_inp, nrows=10), "./cifar_imgs/test_input_" + str(epoch) + "_" + str(batch_idx) + ".jpg")
-                save_image(make_grid(cpu_recons, nrows=10), "./cifar_imgs/test_recon_" + str(epoch) + "_" + str(batch_idx) + ".jpg")
-
-            #progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
-            #             % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+                save_image(make_grid(cpu_inp, nrows=10), "./cifar_imgs/test_input_Inlier: " + classes[loader_idx] + "_epoch_" + str(epoch) + "_" + str(batch_idx) + ".jpg")
+                save_image(make_grid(cpu_recons, nrows=10), "./cifar_imgs/test_recon_Inlier:" + classes[loader_idx] + "_epoch_" + str(epoch) + "_" + str(batch_idx) + ".jpg")
     '''
     # Save checkpoint.
     acc = 100.*correct/total
@@ -195,9 +176,50 @@ def test(epoch):
 def save_model(x):
     return x
 
-for epoch in range(start_epoch, start_epoch+200):
-    train(epoch)
-    test(epoch)
+for idx, loaders in enumerate(unified_loaders):
+
+    # Model
+    print('==> Building models..')
+    encoder = facebook_vit(image_size=32, patch_size=4, in_chans=3, num_classes=10, embed_dim=512,
+                           depth=12, num_heads=16, mlp_ratio=4., qkv_bias=False, qk_scale=None,
+                           drop_rate=0., attn_drop_rate=0., drop_path_rate=0., norm_layer=nn.LayerNorm).get_ViT()
+
+    decoder = tmpTransGan(depth1=5, depth2=2, depth3=2, initial_size=8, dim=512,
+                          heads=8, mlp_ratio=4, drop_rate=0.5).get_TransGan()
+    encoder = encoder.to(device)
+    decoder = decoder.to(device)
+    if device == 'cuda':
+        encoder = torch.nn.DataParallel(encoder)
+        decoder = torch.nn.DataParallel(decoder)
+        cudnn.benchmark = True
+
+    criterion = nn.MSELoss()
+    enc_optimizer = optim.Adam(encoder.parameters(), lr=3e-5)
+    dec_optimizer = optim.Adam(decoder.parameters(), lr=0.0001, eps=1e-08)
+
+    if args.resume_enc:
+        # Load checkpoint.
+        print('==> Resuming encoder from checkpoint..')
+        assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
+        checkpoint_encoder = torch.load('./checkpoint/ckpt_enc.pth')
+        encoder.load_state_dict(checkpoint_encoder['encoder'])
+        decoder.load_state_dict(checkpoint_encoder['decoder'])
+        start_epoch = checkpoint_encoder['epoch']
+
+    if args.resume_dec:
+        # Load checkpoint.
+        print('==> Resuming decoder from checkpoint..')
+        assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
+        checkpoint_decoder = torch.load('./checkpoint/ckpt_dec.pth')
+        encoder.load_state_dict(checkpoint_encoder['encoder'])
+        decoder.load_state_dict(checkpoint_encoder['decoder'])
+        start_epoch = checkpoint_decoder['epoch']
+    print("Training inlier class ", classes[idx])
+    for epoch in range(start_epoch, start_epoch+200):
+
+        train(epoch, loaders[0], idx)
+        test(epoch, loaders[1], idx)
+
     if not os.path.isdir('checkpoint'):
         os.mkdir('checkpoint')
     print("saving model...")
@@ -205,11 +227,10 @@ for epoch in range(start_epoch, start_epoch+200):
         'epoch': epoch,
         'model_state_dict': encoder.state_dict(),
         'optimizer_state_dict': enc_optimizer.state_dict(),
-    }, "./checkpoint/ckpt_enc.pth")
+    }, "./checkpoint/ckpt_enc_" + classes[idx] + ".pth")
     torch.save({
         'epoch': epoch,
         'model_state_dict': decoder.state_dict(),
         'optimizer_state_dict': dec_optimizer.state_dict(),
-    }, "./checkpoint/ckpt_dec.pth")
+    }, "./checkpoint/ckpt_dec_" + classes[idx] + ".pth")
     print("Save complete.")
-    #scheduler.step()
