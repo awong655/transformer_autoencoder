@@ -171,7 +171,7 @@ def test(device, encoder, decoder, criterion, testloader, loader_idx):
                 fusions = ['mean']
                 print("INPUTS", inputs.shape)
                 current_inp = inputs[1]
-                mask = VITAttentionRollout(encoder, head_fusion=fusions[i], discard_ratio=0.9)(torch.stack([inputs[0], inputs[1]]))
+                mask = VITAttentionRollout(encoder, head_fusion=fusions[i], discard_ratio=0.9)(inputs)
                 print("MASK OUTPUT SHAPE", mask.shape)
                 mask = mask[1]
                 #attn_grad_rollout = VITAttentionGradRollout(encoder)(inputs)
@@ -188,7 +188,9 @@ def test(device, encoder, decoder, criterion, testloader, loader_idx):
                 np_img = torchvision.transforms.ToPILImage()(inv_tensor)
                 np_img = np_img.resize((32, 32))
 
+                print("NUMPY IMAGE SHAPE1", np.array(np_img).shape)
                 np_img = np.array(np_img)[:, :, ::-1]
+                print("NUMPY IMAGE SHAPE", np_img.shape)
 
                 mask = cv2.resize(mask, (np_img.shape[1], np_img.shape[0]))
                 print("MASK SHAPE:", mask.shape)

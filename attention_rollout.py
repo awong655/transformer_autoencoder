@@ -25,8 +25,9 @@ def mask_input_tensor(input_tensor, mask, image_shape, unnormalize=True):
         input_tensor = invert_normalize(input_tensor)
     np_img = transforms.ToPILImage()(input_tensor) # convert to numpy image
     np_img = np_img.resize((np_img.shape[0], 32, 32)) # ensure size is 32x32
-
-
+    np_img = np.array(np_img)[:, :, :, ::-1]
+    mask = cv2.resize(mask, (mask.shape[0], np_img.shape[1], np_img.shape[2]))
+    mask = show_mask_on_image(np_img, mask)
 
 def rollout(attentions, discard_ratio, head_fusion): # Attentions: (depth, B, H, W)
     result = torch.eye(attentions[0].size(-1))
